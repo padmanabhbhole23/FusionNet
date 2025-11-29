@@ -1,0 +1,32 @@
+body {
+  font-family: Arial, sans-serif;
+  background: #f6f9fc;
+  text-align: center;
+  padding: 50px;
+}
+
+.container {
+  background: #fff;
+  padding: 30px;
+  margin: auto;
+  width: 50%;
+  border-radius: 12px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+}
+
+button {
+  background-color: #007bff;
+  color: white;
+  padding: 10px 25px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.result {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #f0f8ff;
+  border-radius: 10px;
+}

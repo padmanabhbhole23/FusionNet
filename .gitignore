@@ -1,0 +1,10 @@
+uploads/
+DeepFake_Frames/
+heatmaps/
+*.tmp
+*.MOV
+*.mp4
+*.avi
+*.mkv
+*.webm
+*.keras

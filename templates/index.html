@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Deepfake Detection (Fusion + CNN-LSTM)</title>
+    <style>
+        body { font-family: Arial; text-align: center; margin-top: 60px; background-color: #f4f4f4; }
+        .container { background: white; padding: 40px; border-radius: 15px; width: 500px; margin: auto; box-shadow: 0 0 10px rgba(0,0,0,0.2); }
+        input[type=file] { margin: 20px; }
+        .real { color: green; font-size: 20px; font-weight: bold; }
+        .fake { color: red; font-size: 20px; font-weight: bold; }
+        .prob { font-size: 15px; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🎥 Deepfake Detection (Fusion + CNN-LSTM Ensemble)</h2>
+        <form action="/predict" method="post" enctype="multipart/form-data">
+            <p>Upload a short video (same preprocessing as training: 128×128 resize, up to 40 frames).</p>
+            <input type="file" name="video" accept="video/*" required><br>
+            <input type="submit" value="Start Prediction">
+        </form>
+
+        {% if result %}
+            <h3 class="{{ 'real' if 'REAL' in result else 'fake' }}">{{ result }}</h3>
+            <p class="prob">Confidence: {{ confidence }}</p>
+            <p class="prob">Fusion Model (PCA+SVM+XGB): {{ fusion_prob }}</p>
+            <p class="prob">CNN+LSTM: {{ lstm_prob }}</p>
+            <p>Uploaded file: {{ uploaded_file }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>
