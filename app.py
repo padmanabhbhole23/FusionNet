@@ -42,9 +42,6 @@ FAKE_IDX, REAL_IDX = 0, 1
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
-# 🔹 Detect if we are running on Render (used to avoid loading all models)
-ON_RENDER = bool(os.environ.get("RENDER_EXTERNAL_URL")) or bool(os.environ.get("RENDER"))
-
 # ============================================================
 # ✅ Face Detector Configuration
 # ============================================================
@@ -94,52 +91,24 @@ def ensure_dependencies():
 face_net, eye_cascade, smile_cascade = ensure_dependencies()
 
 # ============================================================
-# ✅ Lazy Model Handles (no heavy loading at import)
+# ✅ Load Models
 # ============================================================
-cnn_lstm_model = None
-svm = xgb = fusion = pca = None
-pro_model = None
-lime_explainer = None
+print("🔹 Loading Basic Models...")
+cnn_lstm_model = keras.models.load_model(str(CNN_LSTM_PATH))
+svm, xgb = joblib.load(str(SVM_PATH)), joblib.load(str(XGB_PATH))
+fusion, pca = joblib.load(str(FUSION_PATH)), joblib.load(str(PCA_PATH))
+print("✅ Basic models loaded")
 
-def load_basic_models():
-    """Lazy-load FusionNet basic models (CNN-LSTM + fusion)"""
-    global cnn_lstm_model, svm, xgb, fusion, pca
-    if cnn_lstm_model is not None and fusion is not None:
-        return
-
-    # 💡 On Render, we try to avoid loading these heavy models
-    if ON_RENDER:
-        print("⚠️ Skipping basic FusionNet model loading on Render to save memory.")
-        return
-
-    print("🔹 Loading Basic Models (FusionNet)...")
-    cnn_lstm_model = keras.models.load_model(str(CNN_LSTM_PATH))
-    svm = joblib.load(str(SVM_PATH))
-    xgb = joblib.load(str(XGB_PATH))
-    fusion = joblib.load(str(FUSION_PATH))
-    pca = joblib.load(str(PCA_PATH))
-    print("✅ Basic models loaded")
-
-def load_pro_model():
-    """Lazy-load EfficientNet Pro model"""
-    global pro_model
-    if pro_model is not None:
-        return
-    for candidate in MODEL_CANDIDATES:
-        if candidate.exists():
-            print(f"🔹 Loading Pro model: {candidate.name}")
-            pro_model = keras.models.load_model(str(candidate))
-            print("✅ Pro model loaded")
-            return
+for candidate in MODEL_CANDIDATES:
+    if candidate.exists():
+        pro_model = keras.models.load_model(str(candidate))
+        print(f"✅ Loaded Pro model: {candidate.name}")
+        break
+else:
     raise FileNotFoundError("No Pro model file found in root.")
 
-def load_lime():
-    """Lazy-load LIME explainer"""
-    global lime_explainer
-    if lime_explainer is not None:
-        return
-    from lime import lime_image
-    lime_explainer = lime_image.LimeImageExplainer()
+from lime import lime_image
+lime_explainer = lime_image.LimeImageExplainer()
 
 # ============================================================
 # ✅ Helper functions
@@ -176,9 +145,6 @@ def extract_frames_basic(video_path, max_frames=MAX_FRAMES):
 # ✅ Fast Pro Model (EfficientNet + LIME) — Optimized
 # ============================================================
 def predict_pro_fast(video_path):
-    load_pro_model()
-    load_lime()
-
     cap = cv2.VideoCapture(str(video_path))
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if frame_count <= 0:
@@ -201,7 +167,7 @@ def predict_pro_fast(video_path):
 
     cap.release()
     if not fake_scores:
-        return {"mode": "Pro", "final_result": "REAL", "confidence": 0.0}
+        return {"final_result": "REAL", "confidence": 0.0}
 
     mean_fake = np.mean(fake_scores)
     pred = "FAKE" if mean_fake > 0.5 else "REAL"
@@ -209,20 +175,13 @@ def predict_pro_fast(video_path):
     result = {"mode": "Pro", "final_result": pred, "confidence": float(conf)}
 
     # Only generate one heatmap if fake confidence < 0.9
-    if pred == "FAKE" and conf < 0.9 and faces:
+    if pred == "FAKE" and conf < 0.9:
         face_rgb = faces[np.argmax(fake_scores)]
         explanation = lime_explainer.explain_instance(
-            face_rgb,
-            lambda imgs: pro_model.predict(preprocess_input(imgs.astype(np.float32))),
-            top_labels=1,
-            num_samples=300
+            face_rgb, lambda imgs: pro_model.predict(preprocess_input(imgs.astype(np.float32))),
+            top_labels=1, num_samples=300
         )
-        temp, mask = explanation.get_image_and_mask(
-            FAKE_IDX,
-            positive_only=True,
-            num_features=5,
-            hide_rest=False
-        )
+        temp, mask = explanation.get_image_and_mask(FAKE_IDX, positive_only=True, num_features=5, hide_rest=False)
         hm = cv2.applyColorMap((mask*255).astype(np.uint8), cv2.COLORMAP_JET)
         blended = cv2.addWeighted(cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR), 0.6, hm, 0.4, 0)
         fname = f"heatmap_{uuid.uuid4().hex}.jpg"
@@ -234,17 +193,6 @@ def predict_pro_fast(video_path):
 # ✅ Basic Model Prediction (FusionNet)
 # ============================================================
 def predict_basic(path):
-    # On Render we skip heavy basic models and just fallback to Pro under the hood
-    if ON_RENDER:
-        # Keep response structure similar but use Pro prediction
-        pro_result = predict_pro_fast(path)
-        pro_result["mode"] = "Basic (Pro backend on Render)"
-        return pro_result
-
-    load_basic_models()
-    if cnn_lstm_model is None or fusion is None:
-        return {"error": "Basic model not available on this deployment."}
-
     frames = extract_frames_basic(path)
     if frames is None:
         return {"error": "No frames extracted."}
@@ -265,7 +213,6 @@ def predict_basic(path):
 # ✅ Flask App Initialization
 # ============================================================
 app = Flask(__name__)
-
 @app.route("/frames/<path:fname>")
 def frames(fname): return send_from_directory(FRAMES_DIR, fname)
 
@@ -281,20 +228,12 @@ def predict_route():
         filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
         save_path = UPLOAD_DIR / filename
         file.save(save_path)
-
-        requested_version = request.form.get("version", "basic")
-
-        # 🔹 On Render, always use Pro under the hood to avoid loading all models
-        if ON_RENDER:
-            effective_version = "pro"
-        else:
-            effective_version = requested_version
+        version = request.form.get("version", "basic")
 
         # BASIC MODE
-        if effective_version == "basic":
+        if version == "basic":
             result = predict_basic(save_path)
             result["status"] = "done"
-            result["requested_version"] = requested_version
             return jsonify(result)
 
         # PRO MODE (async)
@@ -302,7 +241,6 @@ def predict_route():
             try:
                 result = predict_pro_fast(save_path)
                 result["status"] = "done"
-                result["requested_version"] = requested_version
                 with open(FRAMES_DIR / f"{filename}.json", "w") as f:
                     f.write(json.dumps(result))
             except Exception as e:
@@ -325,10 +263,6 @@ def get_result(task_id):
         return jsonify({"status": "processing"})
     with open(json_path) as f:
         return jsonify(json.load(f))
-
-# ============================================================
-# ✅ Futuristic AI Web Dashboard (unchanged UI)
-# ============================================================
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -606,6 +540,7 @@ input[type="file"]:focus{
         <div class="chip">Real-time AI</div>
       </div>
 
+      <!-- IMPORTANT: method="post" and id="form" -->
       <form id="form" enctype="multipart/form-data" method="post">
         <div class="field">
           <div class="label">Model Version</div>
@@ -672,7 +607,7 @@ function setStatus(text, color){
 }
 
 form.onsubmit = async (e) => {
-  e.preventDefault();
+  e.preventDefault(); // 🔑 stop full page reload
   loader.style.display = 'flex';
   setStatus('Processing', 'processing');
   resultEl.innerHTML = '';
@@ -763,6 +698,8 @@ function showResult(j){
 </body>
 </html>
 """
+
+
 
 @app.route("/")
 def index(): return render_template_string(INDEX_HTML)
